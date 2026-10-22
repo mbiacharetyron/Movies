@@ -39,6 +39,15 @@ from types import SimpleNamespace
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 
+CANCEL_WORDS = frozenset({"c", "cancel", "q", "quit"})
+CANCEL_HINT = "c to cancel"
+
+
+def check_cancel(raw):
+    if raw.strip().lower() in CANCEL_WORDS:
+        print("Cancelled.")
+        sys.exit(0)
+
 
 def load_dotenv(path=None):
     """Load KEY=VALUE lines from a .env file into os.environ (only if unset)."""
@@ -171,18 +180,39 @@ def bot_usernames_from_env():
     return bots
 
 
+def search_relevance(query, msg):
+    """Higher = better match for ordering results."""
+    text = label(msg).lower()
+    q = query.lower().strip()
+    if not text or not q:
+        return 0
+    score = 0
+    if q in text:
+        score += 100 + len(q)
+    for word in q.split():
+        if word in text:
+            score += 10
+    return score
+
+
 async def search_bots(client, query, bots, limit):
     """Search each bot chat; return [(bot_username, message), ...]."""
     hits = []
+    seen_ids = set()
     for bot in bots:
         print(f"  searching {bot} ...", flush=True)
         try:
             async for m in client.iter_messages(bot, limit=limit, search=query):
-                if m.media:
-                    hits.append((bot, m))
-                    break
+                if not m.media:
+                    continue
+                key = (bot.lower(), m.id)
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                hits.append((bot, m))
         except Exception as e:
             print(f"    skip ({e})", flush=True)
+    hits.sort(key=lambda hm: search_relevance(query, hm[1]), reverse=True)
     return hits
 
 
@@ -199,7 +229,8 @@ async def find_dialog(client, name_substring):
 def prompt_choice(prompt, count, allow_all=False):
     while True:
         extra = " or 'all'" if allow_all and count > 1 else ""
-        raw = input(f"{prompt} [1-{count}{extra}]: ").strip()
+        raw = input(f"{prompt} [1-{count}{extra}, {CANCEL_HINT}]: ").strip()
+        check_cancel(raw)
         if allow_all and raw.lower() == "all":
             return list(range(count))
         if raw.isdigit():
@@ -209,10 +240,21 @@ def prompt_choice(prompt, count, allow_all=False):
         print("  Invalid choice, try again.")
 
 
+def prompt_line(prompt, default=None):
+    suffix = f" [{CANCEL_HINT}]"
+    if default is not None:
+        suffix = f" [{default}, {CANCEL_HINT}]"
+    raw = input(f"{prompt}{suffix}: ").strip()
+    check_cancel(raw)
+    if not raw and default is not None:
+        return default
+    return raw
+
+
 async def interactive_fetch(client, args):
     title = (args.fetch or "").strip()
     if not title:
-        title = input("Movie / series name to search: ").strip()
+        title = prompt_line("Movie / series name to search")
     if not title:
         sys.exit("No search title given.")
 
@@ -252,7 +294,7 @@ async def interactive_fetch(client, args):
     else:
         print("  (PIRATE MOVIES PRO not found in your dialogs — use --dialogs Pirate)")
 
-    dest_raw = input("\nDestination [1/2]: ").strip() or "1"
+    dest_raw = prompt_line("\nDestination [1=Saved Messages, 2=PIRATE MOVIES PRO]", default="1")
     target, topic = None, None
 
     if dest_raw == "2" and pirate:
