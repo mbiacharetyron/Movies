@@ -85,6 +85,12 @@ def parse_args():
     p.add_argument("--keep-caption", action="store_true", help="Copy the original caption text")
     p.add_argument("--caption", default=None, help="Use this caption instead")
     p.add_argument("--limit", type=int, default=200, help="How far back --last/--search look")
+    p.add_argument(
+        "--sort",
+        choices=("relevance", "alpha", "date-asc", "date-desc"),
+        default=None,
+        help="Result order for --fetch (prompt if omitted and multiple hits)",
+    )
     p.add_argument("--session", default="tg_resend", help="Session file name")
     return p.parse_args()
 
@@ -212,8 +218,40 @@ async def search_bots(client, query, bots, limit):
                 hits.append((bot, m))
         except Exception as e:
             print(f"    skip ({e})", flush=True)
-    hits.sort(key=lambda hm: search_relevance(query, hm[1]), reverse=True)
     return hits
+
+
+def sort_hits(hits, mode, query):
+    if mode == "alpha":
+        hits.sort(key=lambda hm: (label(hm[1]).lower(), hm[0].lower(), hm[1].id))
+    elif mode == "date-asc":
+        hits.sort(key=lambda hm: (hm[1].date or 0, hm[1].id))
+    elif mode == "date-desc":
+        hits.sort(key=lambda hm: (hm[1].date or 0, hm[1].id), reverse=True)
+    else:  # relevance
+        hits.sort(
+            key=lambda hm: (search_relevance(query, hm[1]), label(hm[1]).lower()),
+            reverse=True,
+        )
+    return hits
+
+
+SORT_MENU = {
+    "1": "relevance",
+    "2": "alpha",
+    "3": "date-asc",
+    "4": "date-desc",
+}
+
+
+def prompt_sort_mode():
+    print("\nSort results:")
+    print("  1.  relevance (best match first)")
+    print("  2.  alphabetical (A–Z by filename)")
+    print("  3.  date ascending (oldest received first)")
+    print("  4.  date descending (newest received first)")
+    pick = prompt_line("Sort order", default="1")
+    return SORT_MENU.get(pick, "relevance")
 
 
 async def find_dialog(client, name_substring):
@@ -298,7 +336,14 @@ async def interactive_fetch(client, args):
         print("No media found in any configured bot.")
         return
 
-    print("\nFound:")
+    sort_mode = args.sort
+    if sort_mode is None and len(hits) > 1:
+        sort_mode = prompt_sort_mode()
+    elif sort_mode is None:
+        sort_mode = "relevance"
+    hits = sort_hits(hits, sort_mode, title)
+
+    print(f"\nFound ({sort_mode}):")
     for i, (bot, m) in enumerate(hits, 1):
         print(f"  {i:>2}.  {bot}  id={m.id}  {label(m)}")
 
