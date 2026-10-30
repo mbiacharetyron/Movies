@@ -226,17 +226,46 @@ async def find_dialog(client, name_substring):
     return matches
 
 
+def parse_choice_indices(raw, count):
+    """Parse 1-based selections: 2, 1-3, 1,3,5-7 -> sorted unique 0-based indices."""
+    indices = []
+    for part in raw.replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            if not a.isdigit() or not b.isdigit():
+                return None
+            lo, hi = int(a), int(b)
+            if lo > hi:
+                lo, hi = hi, lo
+            for n in range(lo, hi + 1):
+                if n < 1 or n > count:
+                    return None
+                indices.append(n - 1)
+        elif part.isdigit():
+            n = int(part)
+            if n < 1 or n > count:
+                return None
+            indices.append(n - 1)
+        else:
+            return None
+    if not indices:
+        return None
+    return sorted(set(indices))
+
+
 def prompt_choice(prompt, count, allow_all=False):
     while True:
+        multi = ", 1-3" if count > 1 else ""
         extra = " or 'all'" if allow_all and count > 1 else ""
-        raw = input(f"{prompt} [1-{count}{extra}, {CANCEL_HINT}]: ").strip()
+        raw = input(f"{prompt} [1-{count}{multi}{extra}, {CANCEL_HINT}]: ").strip()
         check_cancel(raw)
         if allow_all and raw.lower() == "all":
             return list(range(count))
-        if raw.isdigit():
-            i = int(raw) - 1
-            if 0 <= i < count:
-                return [i]
+        picked = parse_choice_indices(raw, count)
+        if picked is not None:
+            return picked
         print("  Invalid choice, try again.")
 
 
